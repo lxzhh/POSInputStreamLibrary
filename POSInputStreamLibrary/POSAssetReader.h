@@ -7,12 +7,20 @@
 //
 
 #import <AssetsLibrary/AssetsLibrary.h>
-
+@class PHAsset;
 FOUNDATION_EXTERN NSString * const POSBlobInputStreamAssetDataSourceErrorDomain;
 
 typedef long long POSLength;
 
 @protocol POSAssetReader
+
+/**
+ *  iOS8 later only
+ *
+ */
+- (void)openPHAsset:(PHAsset *)asset
+         fromOffset:(POSLength)offset
+  completionHandler:(void (^)(POSLength assetSize, NSError *error))completionHandler;
 
 - (void)openAsset:(ALAssetRepresentation *)assetRepresentation
        fromOffset:(POSLength)offset

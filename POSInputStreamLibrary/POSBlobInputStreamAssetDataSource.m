@@ -12,7 +12,7 @@
 #import "POSAdjustedAssetReaderIOS8.h"
 #import "POSLocking.h"
 #import "ALAssetsLibrary+POS.h"
-
+#import <Photos/Photos.h>
 #import <MobileCoreServices/MobileCoreServices.h>
 #import <UIKit/UIKit.h>
 
@@ -169,34 +169,84 @@ typedef NS_ENUM(int, ResetMode) {
     id<POSLocking> lock = [self p_lockForOpening];
     [lock lock];
     dispatch_async(self.openDispatchQueue ?: dispatch_get_main_queue(), ^{ @autoreleasepool {
-        self.assetsLibrary = [ALAssetsLibrary new];
-        [_assetsLibrary pos_assetForURL:_assetURL resultBlock:^(ALAsset *asset, ALAssetsGroup *assetsGroup) {
-            ALAssetRepresentation *assetRepresentation = [asset defaultRepresentation];
-            if (assetRepresentation) {
-                self.asset = asset;
-                self.assetRepresentation = assetRepresentation;
-                self.assetReader = (assetsGroup
-                                    ? [POSFastAssetReader new]
-                                    : [self p_assetReaderForAssetRepresentation:assetRepresentation]);
-                [_assetReader
-                 openAsset:assetRepresentation
-                 fromOffset:_readOffset
-                 completionHandler:^(POSLength assetSize, NSError *error) {
-                     if (error != nil || assetSize <= 0 || (_assetSize != 0 && _assetSize != assetSize)) {
-                         self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:error];
-                     } else {
-                         self.assetSize = assetSize;
-                     }
-                     [lock unlock];
-                 }];
-            } else {
-                self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:nil];
-                [lock unlock];
+        if (![[_assetURL.absoluteString lowercaseString] hasPrefix:@"assets-library"]) {
+            //是PHAsset
+            PHFetchResult *result = [PHAsset fetchAssetsWithLocalIdentifiers:@[_assetURL.absoluteString] options:nil];
+            __block PHAsset *asset;
+            if (result.count >0) {
+                asset = [result firstObject];
+            }else{
+                dispatch_semaphore_t    semaphore = dispatch_semaphore_create(0);
+
+                PHFetchOptions *userAlbumsOptions = [PHFetchOptions new];
+                userAlbumsOptions.predicate = [NSPredicate predicateWithFormat:@"estimatedAssetCount > 0"];
+                PHFetchResult *userAlbums = [PHAssetCollection fetchAssetCollectionsWithType:PHAssetCollectionTypeAlbum subtype:PHAssetCollectionSubtypeAlbumMyPhotoStream options:userAlbumsOptions];
+                
+                [userAlbums enumerateObjectsUsingBlock:^(PHAssetCollection *collection, NSUInteger idx1, BOOL *stop) {
+                    NSLog(@"album title %@", collection.localizedTitle);
+                    PHFetchOptions *fetchOptions = [PHFetchOptions new];
+                    fetchOptions.predicate = [NSPredicate predicateWithFormat:@"self.localIdentifier CONTAINS [cd] %@",_assetURL.absoluteString];
+                    PHFetchResult *assetsFetchResult = [PHAsset fetchAssetsInAssetCollection:collection options:fetchOptions];
+                    if ([assetsFetchResult count]>0) {
+                        asset = [assetsFetchResult firstObject];
+                        NSLog(@"assetsFetchResult:%@",asset);
+                    }
+                    dispatch_semaphore_signal(semaphore);
+
+                }];
+                dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
+
             }
-        } failureBlock:^(NSError *error) {
-            self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:error];
-            [lock unlock];
-        }];
+            
+            self.asset = asset;
+            
+            POSAdjustedAssetReaderIOS8 *assetReader = [POSAdjustedAssetReaderIOS8 new];
+            assetReader.suspiciousSize = _adjustedImageMaximumSize;
+            assetReader.completionDispatchQueue = self.openDispatchQueue;
+            self.assetReader = assetReader;
+            
+            [self.assetReader
+             openPHAsset:asset
+             fromOffset:_readOffset
+             completionHandler:^(POSLength assetSize, NSError *error) {
+                 if (error != nil || assetSize <= 0 || (_assetSize != 0 && _assetSize != assetSize)) {
+                     self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:error];
+                 } else {
+                     self.assetSize = assetSize;
+                 }
+                 [lock unlock];
+             }];
+        }else{
+            self.assetsLibrary = [ALAssetsLibrary new];
+            [_assetsLibrary pos_assetForURL:_assetURL resultBlock:^(ALAsset *asset, ALAssetsGroup *assetsGroup) {
+                ALAssetRepresentation *assetRepresentation = [asset defaultRepresentation];
+                if (assetRepresentation) {
+                    self.asset = asset;
+                    self.assetRepresentation = assetRepresentation;
+                    self.assetReader = (assetsGroup
+                                        ? [POSFastAssetReader new]
+                                        : [self p_assetReaderForAssetRepresentation:assetRepresentation]);
+                    [_assetReader
+                     openAsset:assetRepresentation
+                     fromOffset:_readOffset
+                     completionHandler:^(POSLength assetSize, NSError *error) {
+                         if (error != nil || assetSize <= 0 || (_assetSize != 0 && _assetSize != assetSize)) {
+                             self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:error];
+                         } else {
+                             self.assetSize = assetSize;
+                         }
+                         [lock unlock];
+                     }];
+                } else {
+                    self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:nil];
+                    [lock unlock];
+                }
+            } failureBlock:^(NSError *error) {
+                self.error = [NSError pos_assetOpenErrorWithURL:_assetURL reason:error];
+                [lock unlock];
+            }];
+        }
+        
     }});
     [lock waitWithTimeout:DISPATCH_TIME_FOREVER];
 }

@@ -24,6 +24,28 @@
 
 #pragma mark - POSAssetReader
 
+- (void)openPHAsset:(PHAsset *)asset fromOffset:(POSLength)offset completionHandler:(void (^)(POSLength, NSError *))completionHandler{
+    NSError *error;
+    if (!asset) {
+        completionHandler(0, error);
+        return;
+    }
+    void (^openCompletionBlock)(NSData *, NSError *) = ^void(NSData *assetData, NSError *error) {
+        self.imageData = assetData;
+        dispatch_async(self.completionDispatchQueue ?: dispatch_get_main_queue(), ^{
+            completionHandler([_imageData length], error);
+        });
+    };
+    [self p_fetchAssetDataForAsset:asset completionBlock:^(NSData *assetData, NSError *error) {
+        if ([assetData length] <= _suspiciousSize) {
+            [self p_fetchAssetDataForAsset:asset completionBlock:openCompletionBlock];
+        } else {
+            openCompletionBlock(assetData, error);
+        }
+    }];
+
+}
+
 - (void)openAsset:(ALAssetRepresentation *)assetRepresentation
        fromOffset:(POSLength)offset
 completionHandler:(void (^)(POSLength assetSize, NSError *error))completionHandler {
@@ -87,44 +109,56 @@ completionHandler:(void (^)(POSLength assetSize, NSError *error))completionHandl
 - (void)p_fetchAssetDataForAsset:(PHAsset *)asset
                  completionBlock:(void (^)(NSData *assetData, NSError *error))completionHandler {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ @autoreleasepool {
-        PHImageManager *imageManager = [PHImageManager defaultManager];
-        PHImageRequestOptions *options = [PHImageRequestOptions new];
-        options.version = PHVideoRequestOptionsVersionCurrent;
-        options.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
-        options.resizeMode = PHImageRequestOptionsResizeModeNone;
-        options.synchronous = YES;
-        options.networkAccessAllowed = NO;
-        [imageManager
-         requestImageDataForAsset:asset
-         options:options
-         resultHandler:^(NSData *imageData, NSString *dataUTI, UIImageOrientation orientation, NSDictionary *info) {
-            if (info[PHImageErrorKey] != nil) {
-                NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
-                                                     code:211
-                                                 userInfo:@{ NSLocalizedDescriptionKey: @"Failed to fetch data for image.",
-                                                             NSUnderlyingErrorKey: info[PHImageErrorKey]}];
-                completionHandler(nil, error);
-            } else if ([info[PHImageCancelledKey] boolValue]) {
-                NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
-                                                     code:212
-                                                 userInfo:@{ NSLocalizedDescriptionKey: @"Fetching data for image was canceled."}];
-                completionHandler(nil, error);
-            } else if ([info[PHImageResultIsInCloudKey] boolValue]) {
-                NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
-                                                     code:213
-                                                 userInfo:@{ NSLocalizedDescriptionKey: @"Image is located in the cloud."}];
-                completionHandler(nil, error);
-            } else {
-                NSLog(@"dataUTI :%@",dataUTI);
-                NSString *extension = [dataUTI pathExtension];
-                if ([@[@"heif",@"heic"] containsObject:extension]) {
-                    CIImage *ciImage = [CIImage imageWithData:imageData];
-                    CIContext *context = [CIContext context];
-                    imageData = [context JPEGRepresentationOfImage:ciImage colorSpace:ciImage.colorSpace options:@{}];
+        if (asset.mediaType == PHAssetMediaTypeImage) {
+            PHImageManager *imageManager = [PHImageManager defaultManager];
+            PHImageRequestOptions *options = [PHImageRequestOptions new];
+            options.version = PHVideoRequestOptionsVersionCurrent;
+            options.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+            options.resizeMode = PHImageRequestOptionsResizeModeNone;
+            options.synchronous = YES;
+            options.networkAccessAllowed = NO;
+            [imageManager
+             requestImageDataForAsset:asset
+             options:options
+             resultHandler:^(NSData *imageData, NSString *dataUTI, UIImageOrientation orientation, NSDictionary *info) {
+                 if (info[PHImageErrorKey] != nil) {
+                     NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
+                                                          code:211
+                                                      userInfo:@{ NSLocalizedDescriptionKey: @"Failed to fetch data for image.",
+                                                                  NSUnderlyingErrorKey: info[PHImageErrorKey]}];
+                     completionHandler(nil, error);
+                 } else if ([info[PHImageCancelledKey] boolValue]) {
+                     NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
+                                                          code:212
+                                                      userInfo:@{ NSLocalizedDescriptionKey: @"Fetching data for image was canceled."}];
+                     completionHandler(nil, error);
+                 } else if ([info[PHImageResultIsInCloudKey] boolValue]) {
+                     NSError *error = [NSError errorWithDomain:POSBlobInputStreamAssetDataSourceErrorDomain
+                                                          code:213
+                                                      userInfo:@{ NSLocalizedDescriptionKey: @"Image is located in the cloud."}];
+                     completionHandler(nil, error);
+                 } else {
+                     NSLog(@"dataUTI :%@",dataUTI);
+                     NSString *extension = [dataUTI pathExtension];
+                     if ([@[@"heif",@"heic"] containsObject:extension]) {
+                         CIImage *ciImage = [CIImage imageWithData:imageData];
+                         CIContext *context = [CIContext context];
+                         imageData = [context JPEGRepresentationOfImage:ciImage colorSpace:ciImage.colorSpace options:@{}];
+                     }
+                     completionHandler(imageData, nil);
+                 }
+             }];
+        }else if(asset.mediaType == PHAssetMediaTypeVideo){
+            PHVideoRequestOptions *options = [[PHVideoRequestOptions alloc] init];
+            options.version = PHVideoRequestOptionsVersionOriginal;
+            [[PHImageManager defaultManager] requestAVAssetForVideo:asset options:options resultHandler:^(AVAsset *asset, AVAudioMix *audioMix, NSDictionary *info) {
+                if ([asset isKindOfClass:[AVURLAsset class]]) {
+                    AVURLAsset* urlAsset = (AVURLAsset*)asset;
+                    NSData *data = [NSData dataWithContentsOfURL:urlAsset.URL];
+                    completionHandler(data, nil);
                 }
-                completionHandler(imageData, nil);
-            }
-        }];
+            }];
+        }
     }});
 }
 
