@@ -115,6 +115,13 @@ completionHandler:(void (^)(POSLength assetSize, NSError *error))completionHandl
                                                  userInfo:@{ NSLocalizedDescriptionKey: @"Image is located in the cloud."}];
                 completionHandler(nil, error);
             } else {
+                NSLog(@"dataUTI :%@",dataUTI);
+                NSString *extension = [dataUTI pathExtension];
+                if ([@[@"heif",@"heic"] containsObject:extension]) {
+                    CIImage *ciImage = [CIImage imageWithData:imageData];
+                    CIContext *context = [CIContext context];
+                    imageData = [context JPEGRepresentationOfImage:ciImage colorSpace:ciImage.colorSpace options:@{}];
+                }
                 completionHandler(imageData, nil);
             }
         }];
